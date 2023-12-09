@@ -7,6 +7,12 @@ ___________Client Application (client.c) - Simple Documentation_________________
 
 #include <stdio.h>
 
+#define CHECK(condition, error_id, message)\
+    if ((condition))             \
+    {                            \
+        perror(message);         \
+        exit(error_id);          \
+    }                            \
 
 int main(){
 
