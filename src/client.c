@@ -35,6 +35,9 @@ int main(){
     socket_descriptor = configure_socket(&server);
 
     CHECK(-1 == connect(socket_descriptor, (struct sockaddr *) &server, sizeof(struct sockaddr)), "[client]:error at connect()\n")
+    CHECK(printf("---------->WELCOME TO MY SSH<----------\n") < 0, "[client]:error at printf()!\n")
+    CHECK(printf("Available commands:\n1.login(if you already have an account)\n2.signup(to register an account)\n3.quit(to leave terminal interface)\n") < 0, "[client]:error at printf()!\n")
+    CHECK(fflush(stdout) != 0, "[client]:Error at fflush\n")
 
     //receiving commands from user until he decided to quit
     while(1)
@@ -45,17 +48,10 @@ int main(){
         bzero(user_command, sizeof(user_command));
         CHECK(-1 == read(0, user_command, COMMAND_BUFF_SIZE), "[client]:error at read()!\n")
 
+        if(strcmp(user_command, "\n") == 0)
+            continue;
+
         send_command_to_server();
-        // //encrypt command
-        // const char* encrypted_command = encrypt_command(user_command);
-        // //send encrypted command
-        // CHECK(-1 == write(socket_descriptor, encrypt_command, sizeof(encrypt_command)), "[client]:error at sending encrypted command to server!\n")
-
-        // //read encrypted server answer
-        // CHECK(-1 == read(socket_descriptor, encrypted_server_answer, ANSWER_BUFF_SIZE), "[client]:Error at receiving message from server!")
-
-        // //decrypt 
-        // strcpy(server_answer, (encrypted_server_answer));
         receive_answer_from_server();
 
         //display answer
@@ -115,10 +111,9 @@ void receive_answer_from_server()
     bzero(encrypted_server_answer, sizeof(encrypted_server_answer));
     //read answer length
     CHECK(-1 == read(socket_descriptor, &len, sizeof(int)), "[client]:Error at receiving message from server!\n")
-    printf("%d\n", len);
     CHECK(-1 == read(socket_descriptor, &encrypted_server_answer, len), "[client]:Error at receiving message from server!\n")
 
     //decrypt 
     bzero(server_answer, sizeof(server_answer));
-    strcpy(server_answer, (encrypted_server_answer));
+    strcpy(server_answer, decrypt_server_answer(encrypted_server_answer));
 }
