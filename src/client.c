@@ -26,8 +26,12 @@ char encrypted_server_answer[ANSWER_BUFF_SIZE];
 int configure_socket(struct sockaddr_in *server);
 const char* encrypt_command(const char* command);
 const char* decrypt_server_answer(const char* answer);
+
 void send_command_to_server();
 void receive_answer_from_server();
+
+void fill_login_form();
+void fill_signup_form();
 
 int main(){
 
@@ -36,7 +40,7 @@ int main(){
 
     CHECK(-1 == connect(socket_descriptor, (struct sockaddr *) &server, sizeof(struct sockaddr)), "[client]:error at connect()\n")
     CHECK(printf("---------->WELCOME TO MY SSH<----------\n") < 0, "[client]:error at printf()!\n")
-    CHECK(printf("Available commands:\n1.login(if you already have an account)\n2.signup(to register an account)\n3.quit(to leave terminal interface)\n") < 0, "[client]:error at printf()!\n")
+    CHECK(printf("Available commands:\n1.login(if you already have an account)\n2.sign-up(to register an account)\n3.quit(to leave terminal interface)\n") < 0, "[client]:error at printf()!\n")
     CHECK(fflush(stdout) != 0, "[client]:Error at fflush\n")
 
     //receiving commands from user until he decided to quit
@@ -50,6 +54,11 @@ int main(){
 
         if(strcmp(user_command, "\n") == 0)
             continue;
+
+        if (strcmp("login\n", user_command) == 0)
+            fill_login_form();
+        else if(strcmp("sign-up\n", user_command) == 0)
+            fill_signup_form();
 
         send_command_to_server();
         receive_answer_from_server();
@@ -116,4 +125,37 @@ void receive_answer_from_server()
     //decrypt 
     bzero(server_answer, sizeof(server_answer));
     strcpy(server_answer, decrypt_server_answer(encrypted_server_answer));
+}
+
+void fill_login_form()
+{
+
+}
+
+void fill_signup_form()
+{
+    char username[32];
+    // char password[32];
+    char *password = NULL;
+    
+    //get entered username
+    CHECK(printf("USERNAME:") < 0, "[client]:error at printf()!\n")
+    CHECK(fflush(stdout) != 0, "[client]:Error at fflush!\n")
+    CHECK(scanf("%s", username) < 0, "[client]:Error at scanf()!\n")
+
+    //get entered passworkd
+    password = getpass("PASSWORD:");
+
+    //validate
+    if(strlen(username) > 32 || strlen(password) > 32)
+    {
+        CHECK(printf("Username and password can have maximum 32 characters") < 0, "[client]:error at printf()!\n")
+        CHECK(fflush(stdout) != 0, "[client]:Error at fflush!\n")
+        bzero(user_command, sizeof(user_command));
+        return;
+    }
+    user_command[strlen(user_command) - 1] = ' ';
+    strcat(user_command, username);
+    strcat(user_command, " ");
+    strcat(user_command, password);
 }

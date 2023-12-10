@@ -14,4 +14,18 @@
         exit(-1);                \
     }                            \
 
+#define DB_CHECK(condition, message)                      \
+    if (!(condition))                                     \
+    {                                                     \
+        fprintf(stderr, "database error: %s\n", message); \
+        sqlite3_close(db);                                \
+        exit(-1);                               \
+    }
+
+
+struct user_credentials {
+    char username[32];
+    char password[32];
+};
+
 #endif
