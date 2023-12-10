@@ -15,6 +15,7 @@ ___________Client Application (client.c) - Simple Documentation_________________
 #include <stdlib.h>
 #include <netdb.h>
 #include <string.h> 
+#include <stdbool.h>
 #include "utils.h"
 
 int socket_descriptor;
@@ -22,6 +23,8 @@ int socket_descriptor;
 char user_command[COMMAND_BUFF_SIZE];
 char server_answer[ANSWER_BUFF_SIZE];
 char encrypted_server_answer[ANSWER_BUFF_SIZE];
+
+bool is_logged = false;
 
 int configure_socket(struct sockaddr_in *server);
 const char* encrypt_command(const char* command);
@@ -64,6 +67,10 @@ int main(){
         receive_answer_from_server();
 
         //display answer
+
+        if(!strcmp(server_answer, "login finished with result: succes!\n"))
+            is_logged = true;
+
         CHECK(printf("%s\n", server_answer) < 0, "[client]:error at printf()!\n")
         CHECK(fflush(stdout) != 0, "[client]:Error at fflush\n")
 
@@ -129,13 +136,40 @@ void receive_answer_from_server()
 
 void fill_login_form()
 {
+    if(is_logged)
+    {
+        CHECK(printf("You are already logged in!") < 0, "[client]:error at printf()!\n")
+        CHECK(fflush(stdout) != 0, "[client]:Error at fflush!\n")
+        return;
+    }
+    char username[32];
+    char *password = NULL;
+    
+    //get entered username
+    CHECK(printf("USERNAME:") < 0, "[client]:error at printf()!\n")
+    CHECK(fflush(stdout) != 0, "[client]:Error at fflush!\n")
+    CHECK(scanf("%s", username) < 0, "[client]:Error at scanf()!\n")
 
+    //get entered passworkd
+    password = getpass("PASSWORD:");
+
+    //validate
+    if(strlen(username) > 32 || strlen(password) > 32)
+    {
+        CHECK(printf("Username and password can have maximum 32 characters") < 0, "[client]:error at printf()!\n")
+        CHECK(fflush(stdout) != 0, "[client]:Error at fflush!\n")
+        bzero(user_command, sizeof(user_command));
+        return;
+    }
+    user_command[strlen(user_command) - 1] = ' ';
+    strcat(user_command, username);
+    strcat(user_command, " ");
+    strcat(user_command, password);
 }
 
 void fill_signup_form()
 {
     char username[32];
-    // char password[32];
     char *password = NULL;
     
     //get entered username
