@@ -18,22 +18,34 @@ ___________Server Application (server.c) - Simple Documentation_________________
 #include <sqlite3.h>
 #include <stdbool.h>
 #include "commands.h"
+#include "encryption.h"
 #include "utils.h"
 
 #define MAX_CLIENTS 64
+#define MAX_ARGS 64
 
 int server_descriptor;
 
-char encrypted_user_command[COMMAND_BUFF_SIZE];
+unsigned char encrypted_user_command[COMMAND_BUFF_SIZE];
 char user_command[COMMAND_BUFF_SIZE];
 char server_answer[ANSWER_BUFF_SIZE];
-// char encrypted_server_answer[ANSWER_BUFF_SIZE];
+unsigned char encrypted_server_answer[ANSWER_BUFF_SIZE];
+
+int args_counter;
+struct argument
+{
+    char value[128];
+}user_args[MAX_ARGS];
 
 struct thread_data {
 	int id;
 	int client_descriptor;
     bool is_logged;
 };
+
+
+void send_server_public_key(RSA *rsa_keypair, int client_descriptor);
+void receive_client_public_key(RSA **rsa_keypair, int client_descriptor);
 
 int configure_server(struct sockaddr_in *server);
 static void *treat_client(void *arg);
@@ -46,6 +58,7 @@ bool handle_redirection();
 bool handle_command_chaining();
 
 int parse_user_command();
+bool get_user_args();
 bool execute_user_command(int command_id, struct thread_data * threadL);
 
 int sign_up();
@@ -56,6 +69,9 @@ int insert_user_db(struct user_credentials *new_user);
 int check_credentials(struct user_credentials *user);
 
 int main(){
+
+    // Generate key pair
+    generate_keypair(&rsa_keypair_server, 2048);
 
     struct sockaddr_in server;
     struct sockaddr_in client;
@@ -111,42 +127,54 @@ const char *decrypt_client_command(const char* encrypted_command)
     return encrypted_command;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 bool read_encrypted_command(int client_descriptor)
 {
     bzero(encrypted_user_command, sizeof(encrypted_user_command));
+    bzero(user_command, sizeof(user_command));
     //read command len
     int len = 0;
-    // CHECK(0 >= read(client_descriptor, &len, sizeof(len)), "[thread]:error at read()!\n")
     if(0 >= read(client_descriptor, &len, sizeof(len)))
     {
         perror("[thread]:error at read()!\n");
         return false;
     }
     //read encrypted command
-    // CHECK(0 >= read(client_descriptor, &encrypted_user_command, len), "[thread]:error at read()!\n")
     if(read(client_descriptor, &encrypted_user_command, len) <= 0)
     {
         perror("[thread]:error at read()!\n");
         return false;
     }
+    
+    bzero(plain_text, sizeof(plain_text));
+    rsa_decrypt(encrypted_user_command, RSA_size(rsa_keypair_server), rsa_keypair_server, plain_text);
+    memcpy(user_command, plain_text, COMMAND_BUFF_SIZE);
     return true;
 }
 
 bool send_answer_to_client(int client_descriptor, const char * answer)
 {
-    int len = strlen(answer);
+    //encrypt command
+    bzero(plain_text, sizeof(plain_text));
+    memcpy(plain_text, answer, ANSWER_BUFF_SIZE);
+    rsa_encrypt(plain_text, strlen((char *)plain_text), rsa_keypair_client, encrypted_server_answer);
+    
+    int len = RSA_size(rsa_keypair_client);
     if(0 >= write(client_descriptor, &len, sizeof(int)))
     {
         perror("[thread]:error at write()!\n");
         return false;
     }
-    if(0 >= write(client_descriptor, answer, len))
+    if(0 >= write(client_descriptor, encrypted_server_answer, len))
     {
         perror("[thread]:error at write()!\n");
         return false;
     }
     return true;
 }
+
+#pragma GCC diagnostic pop
 
 static void *treat_client(void *arg)
 {
@@ -155,16 +183,20 @@ static void *treat_client(void *arg)
     threadL.is_logged = false;
     pthread_detach(pthread_self());
 
+    receive_client_public_key(&rsa_keypair_client, threadL.client_descriptor);
+    send_server_public_key(rsa_keypair_server, threadL.client_descriptor);
+
     while(1)
     {
        
         bool result = read_encrypted_command(threadL.client_descriptor);
         if(!result) ;
 
-        strcpy(user_command, decrypt_client_command(encrypted_user_command));
+        // strcpy(user_command, decrypt_client_command(encrypted_user_command));
         
         char *command_name = strtok(user_command, " \n");
         int command_id = parse_user_command(command_name);
+        // get_user_args();
         
         result = execute_user_command(command_id, &threadL);
         if(!result)continue;
@@ -175,6 +207,23 @@ static void *treat_client(void *arg)
             close(threadL.client_descriptor);
             return(NULL);
         }
+    }
+}
+
+bool get_user_args()
+{
+
+    char *token = strtok(NULL, " ");
+    while(token)
+    {   
+        strcpy(user_args[args_counter++].value, token);
+        token = strtok(NULL, " ");
+    }
+
+    for(int i=0; i<args_counter; i++)
+    {
+        printf("%s\n", user_args[i].value);
+        fflush(stdout);
     }
 }
 
@@ -279,6 +328,9 @@ int login()
         return -1;
     }
 
+    strcat(working_dir, "../user_space/");
+    strcat(working_dir, new_user.username);
+    
     return result;
 }
 
@@ -398,7 +450,10 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_mkdir();
+        const char * path;
+        // strcpy(path, working_dir);
+        // strcat(path, "")
+        int result = l_mkdir(path, 0);
 
         if(!result)
         {
@@ -487,7 +542,8 @@ int verify_username(char * username)
     rc = sqlite3_exec(db, createTableSQL, NULL, NULL, NULL);
 
     char get_usernames[1024];
-	snprintf(get_usernames, sizeof(get_usernames), "SELECT * FROM Users WHERE Username = \'%s\'", username);
+	snprintf(get_usernames, sizeof(get_usernames), 
+    "SELECT * FROM Users WHERE Username = \'%s\'", username);
 
 	printf("[thread]:Database Query On Username Field: %s\n", get_usernames);
     fflush(stdout);
@@ -530,3 +586,64 @@ int insert_user_db(struct user_credentials *new_user)
 
 	sqlite3_close(db);
 }
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+void send_server_public_key(RSA *rsa_keypair, int client_descriptor) {
+
+    // Check if the RSA object is valid
+    if (rsa_keypair == NULL) {
+        // Handle error
+        return;
+    }
+
+    // Get the public key components (modulus and public exponent)
+    const BIGNUM *modulus = NULL;
+    const BIGNUM *exponent = NULL;
+    RSA_get0_key(rsa_keypair, &modulus, &exponent, NULL);
+
+    // Convert the components to hexadecimal strings for transmission
+    char *modulus_hex = BN_bn2hex(modulus);
+    char *exponent_hex = BN_bn2hex(exponent);
+
+    // Send modulus_hex and exponent_hex to the client
+    int len_modulus_hex = strlen(modulus_hex);
+    CHECK(0 >= write(client_descriptor, &len_modulus_hex, sizeof(int)), "[thread]:error at sending public key(modulus hex) length")
+    CHECK(0 >= write(client_descriptor, modulus_hex, len_modulus_hex), "[thread]:error at sending public key(modulus hex)")
+    
+    int len_exponent_hex = strlen(exponent_hex);
+    CHECK(0 >= write(client_descriptor, &len_exponent_hex, sizeof(int)), "[thread]:error at sending public key(exponent hex) length")
+    CHECK(0 >= write(client_descriptor, exponent_hex, len_exponent_hex), "[thread]:error at sending public key(exponent hex)")
+
+    // Free the memory allocated for the hexadecimal strings
+    OPENSSL_free(modulus_hex);
+    OPENSSL_free(exponent_hex);
+}
+
+void  receive_client_public_key(RSA **rsa_public_key, int client_descriptor) {
+    // Placeholder for receiving the modulus and exponent strings from the server
+    char modulus_hex[1024];
+    char exponent_hex[1024];
+
+    // Receive modulus and exponent 
+    int len = 0;
+    CHECK(-1 == read(client_descriptor, &len, sizeof(int)), "[thread]:Error at receiving modulus(client public key) length!\n")
+    CHECK(-1 == read(client_descriptor, &modulus_hex, len), "[thread]:Error at receiving modulus(client public key)!\n")
+
+    CHECK(-1 == read(client_descriptor, &len, sizeof(int)), "[thread]:Error at receiving exponent(client public key) length!\n")
+    CHECK(-1 == read(client_descriptor, &exponent_hex, len), "[thread]:Error at receiving expoent(client public key)!\n")
+
+    // Convert the modulus and exponent strings back to BIGNUM objects
+    BIGNUM *modulus = BN_new();
+    BIGNUM *exponent = BN_new();
+    BN_hex2bn(&modulus, modulus_hex);
+    BN_hex2bn(&exponent, exponent_hex);
+
+    // Create an RSA object with the received modulus and exponent
+    RSA *rsa_key = RSA_new();
+    RSA_set0_key(rsa_key, modulus, exponent, NULL);
+
+    // Set the RSA key to the output parameter
+    *rsa_public_key = rsa_key;
+}
+#pragma GCC diagnostic pop

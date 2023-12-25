@@ -16,19 +16,22 @@ ___________Client Application (client.c) - Simple Documentation_________________
 #include <netdb.h>
 #include <string.h> 
 #include <stdbool.h>
+#include "encryption.h"
 #include "utils.h"
 
 int socket_descriptor;
 
 char user_command[COMMAND_BUFF_SIZE];
+unsigned char encrypted_user_command[COMMAND_BUFF_SIZE];
 char server_answer[ANSWER_BUFF_SIZE];
-char encrypted_server_answer[ANSWER_BUFF_SIZE];
+unsigned char encrypted_server_answer[ANSWER_BUFF_SIZE];
 
 bool is_logged = false;
 
+void receive_server_public_key(RSA **rsa_public_key);
+void send_client_public_key(RSA *rsa_public_key);
+
 int configure_socket(struct sockaddr_in *server);
-const char* encrypt_command(const char* command);
-const char* decrypt_server_answer(const char* answer);
 
 void send_command_to_server();
 void receive_answer_from_server();
@@ -38,6 +41,9 @@ void fill_signup_form();
 
 int main(){
 
+     // Generate key pair
+    generate_keypair(&rsa_keypair_client, 2048);
+
     struct sockaddr_in server;
     socket_descriptor = configure_socket(&server);
 
@@ -46,7 +52,11 @@ int main(){
     CHECK(printf("Available commands:\n1.login(if you already have an account)\n2.sign-up(to register an account)\n3.quit(to leave terminal interface)\n") < 0, "[client]:error at printf()!\n")
     CHECK(fflush(stdout) != 0, "[client]:Error at fflush\n")
 
-    //receiving commands from user until he decided to quit
+    //server-client public key exchange
+    send_client_public_key(rsa_keypair_client);
+    receive_server_public_key(&rsa_keypair_server);
+
+    //receiving commands from user until he decides to quit
     while(1)
     {
         CHECK(printf("-->") < 0, "[client]:error at printf()!\n")
@@ -67,7 +77,6 @@ int main(){
         receive_answer_from_server();
 
         //display answer
-
         if(!strcmp(server_answer, "login finished with result: succes!\n"))
             is_logged = true;
 
@@ -99,25 +108,19 @@ int configure_socket(struct sockaddr_in *server)
     return socket_descriptor;
 }
 
-const char *encrypt_command(const char *command)
-{
-    return command;
-}
-
-const char *decrypt_server_answer(const char *command)
-{
-    return command;
-}
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 void send_command_to_server()
 {   
     //encrypt command
-    const char* encrypted_command = encrypt_command(user_command);
+    bzero(plain_text, sizeof(plain_text));
+    memcpy(plain_text, user_command, COMMAND_BUFF_SIZE);
+    rsa_encrypt(plain_text, strlen((char *)plain_text), rsa_keypair_server, encrypted_user_command);
     //send len of the message
-    int len = strlen(encrypted_command);
+    int len = RSA_size(rsa_keypair_server);
     CHECK(-1 == write(socket_descriptor, &len, sizeof(len)), "[client]:error at sending encrypted command lenght to server!\n")
     //send encrypted command
-    CHECK(-1 == write(socket_descriptor, encrypted_command, len), "[client]:error at sending encrypted command to server!\n")
+    CHECK(-1 == write(socket_descriptor, encrypted_user_command, len), "[client]:error at sending encrypted command to server!\n")
 }
 
 void receive_answer_from_server()
@@ -130,9 +133,13 @@ void receive_answer_from_server()
     CHECK(-1 == read(socket_descriptor, &encrypted_server_answer, len), "[client]:Error at receiving message from server!\n")
 
     //decrypt 
+    bzero(plain_text, sizeof(plain_text));
     bzero(server_answer, sizeof(server_answer));
-    strcpy(server_answer, decrypt_server_answer(encrypted_server_answer));
+    rsa_decrypt(encrypted_server_answer, RSA_size(rsa_keypair_client), rsa_keypair_client, plain_text);
+    memcpy(server_answer, plain_text, ANSWER_BUFF_SIZE);
 }
+
+#pragma GCC diagnostic pop
 
 void fill_login_form()
 {
@@ -193,3 +200,65 @@ void fill_signup_form()
     strcat(user_command, " ");
     strcat(user_command, password);
 }
+
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+void  receive_server_public_key(RSA **rsa_public_key) {
+    // Placeholder for receiving the modulus and exponent strings from the server
+    char modulus_hex[1024];
+    char exponent_hex[1024];
+
+    // Receive modulus and exponent 
+    int len = 0;
+    CHECK(-1 == read(socket_descriptor, &len, sizeof(int)), "[client]:Error at receiving message from server!\n")
+    CHECK(-1 == read(socket_descriptor, &modulus_hex, len), "[client]:Error at receiving message from server!\n")
+
+    CHECK(-1 == read(socket_descriptor, &len, sizeof(int)), "[client]:Error at receiving message from server!\n")
+    CHECK(-1 == read(socket_descriptor, &exponent_hex, len), "[client]:Error at receiving message from server!\n")
+
+    // Convert the modulus and exponent strings back to BIGNUM objects
+    BIGNUM *modulus = BN_new();
+    BIGNUM *exponent = BN_new();
+    BN_hex2bn(&modulus, modulus_hex);
+    BN_hex2bn(&exponent, exponent_hex);
+
+    // Create an RSA object with the received modulus and exponent
+    RSA *rsa_key = RSA_new();
+    RSA_set0_key(rsa_key, modulus, exponent, NULL);
+
+    // Set the RSA key to the output parameter
+    *rsa_public_key = rsa_key;
+}
+
+void send_client_public_key(RSA *rsa_public_key)
+{
+     // Check if the RSA object is valid
+    if (rsa_keypair_client == NULL) {
+        // Handle error
+        return;
+    }
+
+    // Get the public key components (modulus and public exponent)
+    const BIGNUM *modulus = NULL;
+    const BIGNUM *exponent = NULL;
+    RSA_get0_key(rsa_keypair_client, &modulus, &exponent, NULL);
+
+    // Convert the components to hexadecimal strings for transmission
+    char *modulus_hex = BN_bn2hex(modulus);
+    char *exponent_hex = BN_bn2hex(exponent);
+
+    // Send modulus_hex and exponent_hex to the server
+    int len_modulus_hex = strlen(modulus_hex);
+    CHECK(0 >= write(socket_descriptor, &len_modulus_hex, sizeof(int)), "[client]:error at sending public key(modulus hex) length")
+    CHECK(0 >= write(socket_descriptor, modulus_hex, len_modulus_hex), "[client]:error at sending public key(modulus hex)")
+    
+    int len_exponent_hex = strlen(exponent_hex);
+    CHECK(0 >= write(socket_descriptor, &len_exponent_hex, sizeof(int)), "[client]:error at sending public key(exponent hex) length")
+    CHECK(0 >= write(socket_descriptor, exponent_hex, len_exponent_hex), "[client]:error at sending public key(exponent hex)")
+
+    // Free the memory allocated for the hexadecimal strings
+    OPENSSL_free(modulus_hex);
+    OPENSSL_free(exponent_hex);
+}
+#pragma GCC diagnostic pop

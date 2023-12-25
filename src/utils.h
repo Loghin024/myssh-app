@@ -4,7 +4,7 @@
 #define LOCAL_HOST              "127.0.0.1"
 #define PORT                    2048
 
-#define COMMAND_BUFF_SIZE       1024
+#define COMMAND_BUFF_SIZE       4096
 #define ANSWER_BUFF_SIZE        4096
 
 #define CHECK(condition, message)\
@@ -27,5 +27,7 @@ struct user_credentials {
     char username[32];
     char password[32];
 };
+
+char working_dir[1024];
 
 #endif
