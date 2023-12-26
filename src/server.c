@@ -31,7 +31,7 @@ char user_command[COMMAND_BUFF_SIZE];
 char server_answer[ANSWER_BUFF_SIZE];
 unsigned char encrypted_server_answer[ANSWER_BUFF_SIZE];
 
-int args_counter;
+int args_counter[MAX_CLIENTS];
 struct argument
 {
     char value[128];
@@ -41,6 +41,7 @@ struct thread_data {
 	int id;
 	int client_descriptor;
     bool is_logged;
+    char working_dir[1024];
 };
 
 
@@ -61,7 +62,8 @@ int parse_user_command();
 void get_user_args();
 bool execute_user_command(int command_id, struct thread_data * threadL);
 
-int sign_up();
+int sign_up(struct thread_data *threadL);
+int login(struct thread_data *threadL);
 
 //helpers
 int verify_username(char*username);
@@ -218,12 +220,12 @@ static void *treat_client(void *arg)
 void get_user_args(int client_id)
 {
 
-    char *token = strtok(NULL, " ");
-    args_counter = 0;
+    char *token = strtok(NULL, " \n");
+    args_counter[client_id] = 0;
     while(token)
     {   
-        strcpy(user_args[client_id][args_counter++].value, token);
-        token = strtok(NULL, " ");
+        strcpy(user_args[client_id][args_counter[client_id]++].value, token);
+        token = strtok(NULL, " \n");
     }
 }
 
@@ -241,7 +243,7 @@ int parse_user_command(const char * command_name)
     {
         return 3;
     }
-    else if(!strcmp("cp", command_name))
+    else if(!strcmp("cd", command_name))
     {
         return 4;
     }
@@ -269,11 +271,11 @@ int parse_user_command(const char * command_name)
     {
         return 10;
     }
-    else if(!strcmp("ps", command_name))
+    else if(!strcmp("pwd", command_name))
     {
         return 11;
     }
-    else if(!strcmp("grep", command_name))
+    else if(!strcmp("help", command_name))
     {
         return 12;
     }
@@ -281,12 +283,12 @@ int parse_user_command(const char * command_name)
         return -1;
 }
 
-int sign_up(int client_id)
+int sign_up(struct thread_data *threadL)
 {
     struct user_credentials new_user;
 
-    strcpy(new_user.username, user_args[client_id][0].value);
-    strcpy(new_user.password, user_args[client_id][1].value);
+    strcpy(new_user.username, user_args[threadL->id][0].value);
+    strcpy(new_user.password, user_args[threadL->id][1].value);
     
     int result = verify_username(new_user.username);
 
@@ -300,16 +302,18 @@ int sign_up(int client_id)
     }
     
     result = insert_user_db(&new_user);
-
+    strcpy(threadL->working_dir, "../user_space/");
+    strcat(threadL->working_dir, new_user.username);
+    CHECK(0 != mkdir(threadL->working_dir, 0777), "[thread]:error at creating user space!\n");
     return result;
 }
 
-int login(int client_id)
+int login(struct thread_data *threadL)
 {
     struct user_credentials new_user;
 
-    strcpy(new_user.username, user_args[client_id][0].value);
-    strcpy(new_user.password, user_args[client_id][1].value);
+    strcpy(new_user.username, user_args[threadL->id][0].value);
+    strcpy(new_user.password, user_args[threadL->id][1].value);
     
     int result = check_credentials(&new_user);
 
@@ -320,8 +324,8 @@ int login(int client_id)
         return -1;
     }
 
-    strcat(working_dir, "../user_space/");
-    strcat(working_dir, new_user.username);
+    strcpy(threadL->working_dir, "../user_space/");
+    strcat(threadL->working_dir, new_user.username);
     
     return result;
 }
@@ -334,7 +338,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
     }
     else if(command_id == 1)
     {
-        int result = sign_up(threadL->id);
+        int result = sign_up(threadL);
         if(result == -1)
         {
             strcat(server_answer, "\nsign-up finished with result: failure!\n");
@@ -348,7 +352,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You are already logged in!\n");
 
-        int result = login(threadL->id);
+        int result = login(threadL);
 
         if(result == -1)
         {
@@ -358,7 +362,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         else
         {
             threadL->is_logged = true;
-            return send_answer_to_client(threadL->client_descriptor, "login finished with result: succes!\n");
+            return send_answer_to_client(threadL->client_descriptor, "login finished with result: succes!\nEnter help to display available commands!\n");
         }
 
     }
@@ -367,7 +371,12 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_ls();
+        if(args_counter[threadL->id] != 0)
+            return send_answer_to_client(threadL->client_descriptor, "Usage: ls\n");
+
+        bzero(server_answer, sizeof(server_answer));
+        int result = l_ls(threadL->working_dir, server_answer);
+       
 
         if(!result)
         {
@@ -375,18 +384,25 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
             return send_answer_to_client(threadL->client_descriptor, server_answer);
         }
         else
-            return send_answer_to_client(threadL->client_descriptor, "ls finished with result: succes!\n");
+        {
+            if(server_answer == NULL)
+                strcat(server_answer, "No files or directory!\n");
+            return send_answer_to_client(threadL->client_descriptor, server_answer);
+        }
     }
     else if(command_id == 4)
     {
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_cp();
+        if(args_counter[threadL->id] != 1)
+            return send_answer_to_client(threadL->client_descriptor, "Usage: cd path");
+
+        int result = l_cd(threadL->working_dir, user_args[0]->value);
 
         if(!result)
         {
-            strcat(server_answer, "\ncp finished with result: failure!\n");
+            strcat(server_answer, "\ncd finished with result: failure!\n");
             return send_answer_to_client(threadL->client_descriptor, server_answer);
         }
         else
@@ -412,7 +428,15 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_touch();
+        if(args_counter[threadL->id] != 1)
+            return send_answer_to_client(threadL->client_descriptor, "Usage: touch file_name");
+        
+        char path[1024];
+        strcpy(path, threadL->working_dir);
+        strcat(path, "/");
+        strcat(path, user_args[0]->value);
+
+        int result = l_touch(path);
 
         if(!result)
         {
@@ -427,7 +451,15 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_rm();
+        if(args_counter[threadL->id] != 1)
+            return send_answer_to_client(threadL->client_descriptor, "Usage: rm file_name");
+        
+        char path[1024];
+        strcpy(path, threadL->working_dir);
+        strcat(path, "/");
+        strcat(path, user_args[0]->value);
+
+        int result = l_rm(path);
 
         if(!result)
         {
@@ -442,10 +474,15 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
+        if(args_counter[threadL->id] != 1)
+        {
+            return send_answer_to_client(threadL->client_descriptor, "Usage: mkdir directory_name");
+        }
         char path[1024];
-        strcpy(path, working_dir);
-        // strcat(path, "")
-        int result = l_mkdir(path, 0);
+        strcpy(path, threadL->working_dir);
+        strcat(path, "/");
+        strcat(path, user_args[0]->value);
+        int result = l_mkdir(path, 0777);
 
         if(!result)
         {
@@ -460,7 +497,16 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_rmdir();
+        if(args_counter[threadL->id] != 1)
+        {
+            return send_answer_to_client(threadL->client_descriptor, "Usage: rmdir directory_name");
+        }
+
+        char path[1024];
+        strcpy(path, threadL->working_dir);
+        strcat(path, "/");
+        strcat(path, user_args[0]->value);
+        int result = l_rmdir(path);
 
         if(!result)
         {
@@ -475,45 +521,26 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_echo();
-
-        if(!result)
+        for(int i=0; i<args_counter[threadL->id]; i++)
         {
-            strcat(server_answer, "\necho finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            strcat(server_answer, user_args[threadL->id][i].value);
+            strcat(server_answer, " ");
         }
-        else
-            return send_answer_to_client(threadL->client_descriptor, "echo finished with result: succes!\n");
+        return send_answer_to_client(threadL->client_descriptor, server_answer);
     }
     else if(command_id == 11)
     {
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_ps();
-
-        if(!result)
-        {
-            strcat(server_answer, "\nps finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
-        }
-        else
-            return send_answer_to_client(threadL->client_descriptor, "ps finished with result: succes!\n");
+        send_answer_to_client(threadL->client_descriptor, threadL->working_dir);
     }
     else if(command_id == 12)
     {
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        int result = l_grep();
-
-        if(!result)
-        {
-            strcat(server_answer, "\ngrep finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
-        }
-        else
-            return send_answer_to_client(threadL->client_descriptor, "grep finished with result: succes!\n");
+        return send_answer_to_client(threadL->client_descriptor, "Available commands:\n1. pwd\n2. cd\n3. ls\n4. mkdir\n5. rmdir\n6. touch\n7. rm");
     }
     return false;
 }

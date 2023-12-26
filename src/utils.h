@@ -28,6 +28,4 @@ struct user_credentials {
     char password[32];
 };
 
-char working_dir[1024];
-
 #endif
