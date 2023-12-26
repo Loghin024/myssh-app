@@ -1,6 +1,8 @@
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <unistd.h>
+#include "utils.h"
 
 RSA *rsa_keypair_server = NULL;
 RSA *rsa_keypair_client = NULL;
@@ -46,29 +48,5 @@ void rsa_decrypt(const unsigned char *ciphertext, int ciphertext_len, RSA *rsa, 
         handleErrors();
     }
 }
+
 #pragma GCC diagnostic pop
-
-// void send_public_key_to_client(RSA *rsa_keypair) {
-//     // Check if the RSA object is valid
-//     if (rsa_keypair == NULL) {
-//         // Handle error
-//         return;
-//     }
-
-//     // Get the public key components (modulus and public exponent)
-//     const BIGNUM *modulus = NULL;
-//     const BIGNUM *exponent = NULL;
-//     RSA_get0_key(rsa_keypair, &modulus, &exponent, NULL);
-
-//     // Convert the components to hexadecimal strings for transmission
-//     char *modulus_hex = BN_bn2hex(modulus);
-//     char *exponent_hex = BN_bn2hex(exponent);
-
-//     // Send modulus_hex and exponent_hex to the client using printf
-//     printf("Modulus: %s\n", modulus_hex);
-//     printf("Exponent: %s\n", exponent_hex);
-
-//     // Free the memory allocated for the hexadecimal strings
-//     OPENSSL_free(modulus_hex);
-//     OPENSSL_free(exponent_hex);
-// }

@@ -35,7 +35,7 @@ int args_counter;
 struct argument
 {
     char value[128];
-}user_args[MAX_ARGS];
+}user_args[MAX_CLIENTS][MAX_ARGS];
 
 struct thread_data {
 	int id;
@@ -58,7 +58,7 @@ bool handle_redirection();
 bool handle_command_chaining();
 
 int parse_user_command();
-bool get_user_args();
+void get_user_args();
 bool execute_user_command(int command_id, struct thread_data * threadL);
 
 int sign_up();
@@ -157,7 +157,8 @@ bool send_answer_to_client(int client_descriptor, const char * answer)
 {
     //encrypt command
     bzero(plain_text, sizeof(plain_text));
-    memcpy(plain_text, answer, ANSWER_BUFF_SIZE);
+    strcpy((char *)plain_text, answer);
+    // memcpy(plain_text, answer, ANSWER_BUFF_SIZE);
     rsa_encrypt(plain_text, strlen((char *)plain_text), rsa_keypair_client, encrypted_server_answer);
     
     int len = RSA_size(rsa_keypair_client);
@@ -191,39 +192,38 @@ static void *treat_client(void *arg)
        
         bool result = read_encrypted_command(threadL.client_descriptor);
         if(!result) ;
-
-        // strcpy(user_command, decrypt_client_command(encrypted_user_command));
         
         char *command_name = strtok(user_command, " \n");
-        int command_id = parse_user_command(command_name);
-        // get_user_args();
-        
-        result = execute_user_command(command_id, &threadL);
-        if(!result)continue;
-
-        //check if client wants to leave
-        if(strcmp(user_command, "quit\n") == 0)
+        if(*command_name == '\0')
         {
             close(threadL.client_descriptor);
             return(NULL);
         }
+        int command_id = parse_user_command(command_name);
+        get_user_args(threadL.id);
+
+        //check if client wants to leave
+        if(strcmp(user_command, "quit") == 0)
+        {
+            send_answer_to_client(threadL.client_descriptor, "Connection with server finished with succes!\n");
+            close(threadL.client_descriptor);
+            return(NULL);
+        }
+        
+        result = execute_user_command(command_id, &threadL);
+        if(!result)continue;
     }
 }
 
-bool get_user_args()
+void get_user_args(int client_id)
 {
 
     char *token = strtok(NULL, " ");
+    args_counter = 0;
     while(token)
     {   
-        strcpy(user_args[args_counter++].value, token);
+        strcpy(user_args[client_id][args_counter++].value, token);
         token = strtok(NULL, " ");
-    }
-
-    for(int i=0; i<args_counter; i++)
-    {
-        printf("%s\n", user_args[i].value);
-        fflush(stdout);
     }
 }
 
@@ -281,15 +281,12 @@ int parse_user_command(const char * command_name)
         return -1;
 }
 
-int sign_up()
+int sign_up(int client_id)
 {
-    char *token;
     struct user_credentials new_user;
 
-    token = strtok(NULL, " ");
-    strcpy(new_user.username, token);
-    token = strtok(NULL, " ");
-    strcpy(new_user.password, token);
+    strcpy(new_user.username, user_args[client_id][0].value);
+    strcpy(new_user.password, user_args[client_id][1].value);
     
     int result = verify_username(new_user.username);
 
@@ -307,24 +304,19 @@ int sign_up()
     return result;
 }
 
-int login()
+int login(int client_id)
 {
-    char *token;
     struct user_credentials new_user;
 
-    token = strtok(NULL, " ");
-    strcpy(new_user.username, token);
-    token = strtok(NULL, " ");
-    strcpy(new_user.password, token);
+    strcpy(new_user.username, user_args[client_id][0].value);
+    strcpy(new_user.password, user_args[client_id][1].value);
     
-    int result = verify_username(new_user.username);
+    int result = check_credentials(&new_user);
 
     if(result != 0)
     {
         bzero(server_answer, sizeof(server_answer));
-        strcat(server_answer, "Username: ");
-        strcat(server_answer, new_user.username);
-        strcat(server_answer, " doesn't exists!\n");
+        strcat(server_answer, "Username or password are incorect!");
         return -1;
     }
 
@@ -342,7 +334,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
     }
     else if(command_id == 1)
     {
-        int result = sign_up();
+        int result = sign_up(threadL->id);
         if(result == -1)
         {
             strcat(server_answer, "\nsign-up finished with result: failure!\n");
@@ -356,7 +348,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You are already logged in!\n");
 
-        int result = login();
+        int result = login(threadL->id);
 
         if(result == -1)
         {
@@ -450,8 +442,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        const char * path;
-        // strcpy(path, working_dir);
+        char path[1024];
+        strcpy(path, working_dir);
         // strcat(path, "")
         int result = l_mkdir(path, 0);
 
@@ -544,6 +536,39 @@ int verify_username(char * username)
     char get_usernames[1024];
 	snprintf(get_usernames, sizeof(get_usernames), 
     "SELECT * FROM Users WHERE Username = \'%s\'", username);
+
+	printf("[thread]:Database Query On Username Field: %s\n", get_usernames);
+    fflush(stdout);
+	rc = sqlite3_prepare_v2(db, get_usernames, -1, &stmt, NULL);
+	DB_CHECK(!rc, sqlite3_errmsg(db));
+
+	rc = sqlite3_step(stmt);
+	short return_flag = (rc == SQLITE_DONE);
+
+	sqlite3_finalize(stmt);
+	sqlite3_close(db);
+
+	return return_flag;
+}
+
+int check_credentials(struct user_credentials *user)
+{
+    sqlite3 *db;
+	sqlite3_stmt *stmt;
+
+	int rc = sqlite3_open("credentials.db", &db);
+    DB_CHECK(!rc, sqlite3_errmsg(db));
+
+    char *createTableSQL = "CREATE TABLE IF NOT EXISTS Users ("
+                           "ID INTEGER PRIMARY KEY AUTOINCREMENT,"
+                           "Username TEXT NOT NULL,"
+                           "Password TEXT NOT NULL);";
+
+    rc = sqlite3_exec(db, createTableSQL, NULL, NULL, NULL);
+
+    char get_usernames[1024];
+	snprintf(get_usernames, sizeof(get_usernames), 
+    "SELECT * FROM Users WHERE Username = \'%s\' AND Password = \'%s\'", user->username, user->password);
 
 	printf("[thread]:Database Query On Username Field: %s\n", get_usernames);
     fflush(stdout);
