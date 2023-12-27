@@ -85,10 +85,7 @@ bool l_ps()
 {
     return true;
 }
-// bool l_help(){
-    
-//     return true;
-// }
+
 
 bool listFiles(const char *path, char * server_answer) {
     DIR *dir;

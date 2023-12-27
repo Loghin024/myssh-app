@@ -21,8 +21,9 @@ ___________Server Application (server.c) - Simple Documentation_________________
 #include "encryption.h"
 #include "utils.h"
 
-#define MAX_CLIENTS 64
-#define MAX_ARGS 64
+#define MAX_CLIENTS     64
+#define MAX_ARGS        64
+#define MAX_COMMANDS    16
 
 int server_descriptor;
 
@@ -44,6 +45,13 @@ struct thread_data {
     char working_dir[1024];
 };
 
+struct command
+{
+    short operator;//0 = &&   1 = ||   2 = ;
+    char command[COMMAND_BUFF_SIZE];
+};
+struct command user_commands[MAX_CLIENTS][MAX_COMMANDS];
+
 
 void send_server_public_key(RSA *rsa_keypair, int client_descriptor);
 void receive_client_public_key(RSA **rsa_keypair, int client_descriptor);
@@ -58,6 +66,8 @@ bool iterate_through_tokens();
 bool handle_redirection();
 bool handle_command_chaining();
 
+void extract_commands(struct thread_data *threadL, const char *input);
+int solve_command(char * command, char * output, struct thread_data *threadL);
 int parse_user_command();
 void get_user_args();
 bool execute_user_command(int command_id, struct thread_data * threadL);
@@ -157,6 +167,30 @@ bool read_encrypted_command(int client_descriptor)
 
 bool send_answer_to_client(int client_descriptor, const char * answer)
 {
+    // //encrypt command
+    // bzero(plain_text, sizeof(plain_text));
+    // strcpy((char *)plain_text, answer);
+    // // memcpy(plain_text, answer, ANSWER_BUFF_SIZE);
+    // rsa_encrypt(plain_text, strlen((char *)plain_text), rsa_keypair_client, encrypted_server_answer);
+    
+    // int len = RSA_size(rsa_keypair_client);
+    // if(0 >= write(client_descriptor, &len, sizeof(int)))
+    // {
+    //     perror("[thread]:error at write()!\n");
+    //     return false;
+    // }
+    // if(0 >= write(client_descriptor, encrypted_server_answer, len))
+    // {
+    //     perror("[thread]:error at write()!\n");
+    //     return false;
+    // }
+    // return true;
+    strcat(server_answer, answer);
+    return true;
+}
+
+bool submit_answer_to_client(int client_descriptor, char * answer)
+{
     //encrypt command
     bzero(plain_text, sizeof(plain_text));
     strcpy((char *)plain_text, answer);
@@ -174,6 +208,8 @@ bool send_answer_to_client(int client_descriptor, const char * answer)
         perror("[thread]:error at write()!\n");
         return false;
     }
+    bzero(answer, ANSWER_BUFF_SIZE);
+    // memset(answer, 0, sizeof(answer));
     return true;
 }
 
@@ -191,30 +227,96 @@ static void *treat_client(void *arg)
 
     while(1)
     {
-       
-        bool result = read_encrypted_command(threadL.client_descriptor);
-        if(!result) ;
-        
-        char *command_name = strtok(user_command, " \n");
-        if(*command_name == '\0')
+        memset(user_commands[threadL.id], 0, sizeof(user_commands[threadL.id]));
+        bool read_result = read_encrypted_command(threadL.client_descriptor);
+        if(!read_result) ;
+        extract_commands(&threadL, user_command);
+        //solve each command
+        for (int i = 0; i < MAX_COMMANDS && user_commands[threadL.id][i].command[0] != '\0'; i++) 
         {
-            close(threadL.client_descriptor);
-            return(NULL);
+            int result = solve_command(user_commands[threadL.id][i].command, server_answer, &threadL);
+            if(user_commands[threadL.id][i].operator == 0 && result == 0)
+            {
+                send_answer_to_client(threadL.client_descriptor, "command execution failed!");
+                break;
+            }
+            if(user_commands[threadL.id][i].operator == 1 && result == 1)
+            {
+                send_answer_to_client(threadL.client_descriptor, "command execution failed!");
+                break;
+            }
+            if(result == 2)
+            {
+                submit_answer_to_client(threadL.client_descriptor, server_answer);
+                close(threadL.client_descriptor);
+                return(NULL);
+            }
         }
-        int command_id = parse_user_command(command_name);
-        get_user_args(threadL.id);
 
-        //check if client wants to leave
-        if(strcmp(user_command, "quit") == 0)
-        {
-            send_answer_to_client(threadL.client_descriptor, "Connection with server finished with succes!\n");
-            close(threadL.client_descriptor);
-            return(NULL);
-        }
-        
-        result = execute_user_command(command_id, &threadL);
-        if(!result)continue;
+        submit_answer_to_client(threadL.client_descriptor, server_answer);
     }
+}
+
+void extract_commands(struct thread_data *threadL, const char * input)
+{
+    const char *delimiter = "&&||";
+    char *token;
+    char *rest = strdup(input);
+
+    int commandIndex = 0;
+
+    while ((token = strtok_r(rest, delimiter, &rest)) != NULL && commandIndex < MAX_COMMANDS) {
+        // Check if the token contains "&&" or "||"
+        char *operatorPos = strstr(input, token);
+       if (operatorPos != NULL) 
+       {
+            if (strstr(operatorPos, "&&") != NULL) 
+            {
+                user_commands[threadL->id][commandIndex].operator = 0;
+            } else if (strstr(operatorPos, "||") != NULL) 
+            {
+                user_commands[threadL->id][commandIndex].operator = 1;
+            }
+            else if(strstr(operatorPos, ";") != NULL)
+            {
+                user_commands[threadL->id][commandIndex].operator = 2;
+            } 
+            else 
+            {
+                user_commands[threadL->id][commandIndex].operator = -1; // No operator found
+            }
+        } else {
+            user_commands[threadL->id][commandIndex].operator = -1; // No operator found
+        }
+
+        
+        // Extract the command (before the operator)
+        strncpy(user_commands[threadL->id][commandIndex].command, token, sizeof(user_commands[threadL->id][commandIndex].command) - 1);
+        user_commands[threadL->id][commandIndex].command[sizeof(user_commands[threadL->id][commandIndex].command) - 1] = '\0'; // Null-terminate the command
+
+        commandIndex++;
+    }
+}
+
+int solve_command(char * command, char * output, struct thread_data *threadL)
+{
+    char *command_name = strtok(command, " \n");
+    if(*command_name == '\0')
+    {
+        return 2;
+    }
+    int command_id = parse_user_command(command_name);
+    get_user_args(threadL->id);
+
+    //check if client wants to leave
+    if(strcmp(command, "quit") == 0)
+    {
+        // send_answer_to_client(threadL->client_descriptor, "Connection with server finished with succes!\n");
+        strcpy(server_answer, "Connection with server finished with succes!\n");
+        return 2;
+    }
+
+    return execute_user_command(command_id, threadL);
 }
 
 void get_user_args(int client_id)
@@ -342,7 +444,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(result == -1)
         {
             strcat(server_answer, "\nsign-up finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
             return send_answer_to_client(threadL->client_descriptor, "You have succesfully signed up!\n");
@@ -357,7 +460,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(result == -1)
         {
             strcat(server_answer, "\nlogin finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
         {
@@ -372,22 +476,27 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
         if(args_counter[threadL->id] != 0)
-            return send_answer_to_client(threadL->client_descriptor, "Usage: ls\n");
+        {
+            send_answer_to_client(threadL->client_descriptor, "Usage: ls\n");
+            return false;
+        }
 
-        bzero(server_answer, sizeof(server_answer));
-        int result = l_ls(threadL->working_dir, server_answer);
+        char ls_result[2048];
+        bzero(ls_result, sizeof(ls_result));
+        int result = l_ls(threadL->working_dir, ls_result);
        
 
         if(!result)
         {
             strcat(server_answer, "\nls finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
         {
             if(server_answer == NULL)
-                strcat(server_answer, "No files or directory!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+                strcat(ls_result, "No files or directory!\n");
+            return send_answer_to_client(threadL->client_descriptor, ls_result);
         }
     }
     else if(command_id == 4)
@@ -396,14 +505,18 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
         if(args_counter[threadL->id] != 1)
-            return send_answer_to_client(threadL->client_descriptor, "Usage: cd path");
+        {
+            send_answer_to_client(threadL->client_descriptor, "Usage: cd path");
+            return false;
+        }
 
         int result = l_cd(threadL->working_dir, user_args[0]->value);
 
         if(!result)
         {
             strcat(server_answer, "\ncd finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
             return send_answer_to_client(threadL->client_descriptor, "cp finished with result: succes!\n");
@@ -429,7 +542,10 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
         if(args_counter[threadL->id] != 1)
-            return send_answer_to_client(threadL->client_descriptor, "Usage: touch file_name");
+        {
+            send_answer_to_client(threadL->client_descriptor, "Usage: touch file_name");
+            return false;
+        }
         
         char path[1024];
         strcpy(path, threadL->working_dir);
@@ -441,7 +557,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(!result)
         {
             strcat(server_answer, "\ntouch finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
             return send_answer_to_client(threadL->client_descriptor, "touch finished with result: succes!\n");
@@ -452,7 +569,10 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
         if(args_counter[threadL->id] != 1)
+        {
             return send_answer_to_client(threadL->client_descriptor, "Usage: rm file_name");
+            return false;
+        }
         
         char path[1024];
         strcpy(path, threadL->working_dir);
@@ -464,7 +584,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(!result)
         {
             strcat(server_answer, "\nrm finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
             return send_answer_to_client(threadL->client_descriptor, "rm finished with result: succes!\n");
@@ -476,7 +597,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
 
         if(args_counter[threadL->id] != 1)
         {
-            return send_answer_to_client(threadL->client_descriptor, "Usage: mkdir directory_name");
+            send_answer_to_client(threadL->client_descriptor, "Usage: mkdir directory_name");
+            return false;
         }
         char path[1024];
         strcpy(path, threadL->working_dir);
@@ -487,7 +609,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(!result)
         {
             strcat(server_answer, "\nmkdir finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
             return send_answer_to_client(threadL->client_descriptor, "mkdir finished with result: succes!\n");
@@ -499,7 +622,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
 
         if(args_counter[threadL->id] != 1)
         {
-            return send_answer_to_client(threadL->client_descriptor, "Usage: rmdir directory_name");
+            send_answer_to_client(threadL->client_descriptor, "Usage: rmdir directory_name");
+            return false;
         }
 
         char path[1024];
@@ -511,7 +635,8 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(!result)
         {
             strcat(server_answer, "\nrmdir finished with result: failure!\n");
-            return send_answer_to_client(threadL->client_descriptor, server_answer);
+            send_answer_to_client(threadL->client_descriptor, server_answer);
+            return false;
         }
         else
             return send_answer_to_client(threadL->client_descriptor, "rmdir finished with result: succes!\n");
@@ -540,7 +665,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if (!threadL->is_logged)
             return send_answer_to_client(threadL->client_descriptor, "You aren't logged in!\n");
 
-        return send_answer_to_client(threadL->client_descriptor, "Available commands:\n1. pwd\n2. cd\n3. ls\n4. mkdir\n5. rmdir\n6. touch\n7. rm");
+        return send_answer_to_client(threadL->client_descriptor, "Available commands:\n1. pwd\n2. cd\n3. ls\n4. mkdir\n5. rmdir\n6. touch\n7. rm\n8. echo");
     }
     return false;
 }
