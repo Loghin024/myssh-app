@@ -80,6 +80,7 @@ int verify_username(char*username);
 int insert_user_db(struct user_credentials *new_user);
 int check_credentials(struct user_credentials *user);
 
+
 int main(){
 
     // Generate key pair
@@ -98,12 +99,12 @@ int main(){
     {
         int client_descriptor;
         struct thread_data* thread;
-        int length = sizeof(client);
+        socklen_t length = sizeof(client);
 
         CHECK(0 > (client_descriptor = accept(server_descriptor, (struct sockaddr*) &client, &length)), "[server]:error at accept()")
 
         thread = (struct thread_data*)malloc(sizeof(struct thread_data));
-        thread->id = thread_cnt;
+        thread->id = thread_cnt++;
         thread->client_descriptor = client_descriptor;
 
         pthread_create(&threads[thread->id], NULL, &treat_client, thread);
@@ -189,22 +190,23 @@ bool send_answer_to_client(int client_descriptor, const char * answer)
     return true;
 }
 
-bool submit_answer_to_client(int client_descriptor, char * answer)
+bool submit_answer_to_client(int client_descriptor, char * answer, struct thread_data *threadL)
 {
     //encrypt command
     bzero(plain_text, sizeof(plain_text));
+    bzero(encrypted_server_answer, sizeof(encrypted_server_answer));
     strcpy((char *)plain_text, answer);
     // memcpy(plain_text, answer, ANSWER_BUFF_SIZE);
-    rsa_encrypt(plain_text, strlen((char *)plain_text), rsa_keypair_client, encrypted_server_answer);
+    rsa_encrypt(plain_text, strlen((char *)plain_text), rsa_keypair_client[threadL->id], encrypted_server_answer);
     
-    int len = RSA_size(rsa_keypair_client);
+    int len = RSA_size(rsa_keypair_client[threadL->id]);
     if(0 >= write(client_descriptor, &len, sizeof(int)))
     {
         perror("[thread]:error at write()!\n");
         return false;
     }
     if(0 >= write(client_descriptor, encrypted_server_answer, len))
-    {
+    {   
         perror("[thread]:error at write()!\n");
         return false;
     }
@@ -222,7 +224,7 @@ static void *treat_client(void *arg)
     threadL.is_logged = false;
     pthread_detach(pthread_self());
 
-    receive_client_public_key(&rsa_keypair_client, threadL.client_descriptor);
+    receive_client_public_key(&rsa_keypair_client[threadL.id], threadL.client_descriptor);
     send_server_public_key(rsa_keypair_server, threadL.client_descriptor);
 
     while(1)
@@ -230,6 +232,9 @@ static void *treat_client(void *arg)
         memset(user_commands[threadL.id], 0, sizeof(user_commands[threadL.id]));
         bool read_result = read_encrypted_command(threadL.client_descriptor);
         if(!read_result) ;
+
+        printf("%s", user_command);
+        fflush(stdout);
         extract_commands(&threadL, user_command);
         //solve each command
         for (int i = 0; i < MAX_COMMANDS && user_commands[threadL.id][i].command[0] != '\0'; i++) 
@@ -247,13 +252,17 @@ static void *treat_client(void *arg)
             }
             if(result == 2)
             {
-                submit_answer_to_client(threadL.client_descriptor, server_answer);
+                submit_answer_to_client(threadL.client_descriptor, server_answer, &threadL);
                 close(threadL.client_descriptor);
                 return(NULL);
             }
         }
 
-        submit_answer_to_client(threadL.client_descriptor, server_answer);
+        bool submit_res = submit_answer_to_client(threadL.client_descriptor, server_answer, &threadL);
+        if(!submit_res){
+            close(threadL.client_descriptor);
+            return(NULL);
+        }
     }
 }
 
@@ -407,6 +416,7 @@ int sign_up(struct thread_data *threadL)
     strcpy(threadL->working_dir, "../user_space/");
     strcat(threadL->working_dir, new_user.username);
     CHECK(0 != mkdir(threadL->working_dir, 0777), "[thread]:error at creating user space!\n");
+    
     return result;
 }
 
@@ -444,7 +454,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(result == -1)
         {
             strcat(server_answer, "\nsign-up finished with result: failure!\n");
-            send_answer_to_client(threadL->client_descriptor, server_answer);
+            // send_answer_to_client(threadL->client_descriptor, server_answer);
             return false;
         }
         else
@@ -460,7 +470,7 @@ bool execute_user_command(int command_id, struct thread_data * threadL)
         if(result == -1)
         {
             strcat(server_answer, "\nlogin finished with result: failure!\n");
-            send_answer_to_client(threadL->client_descriptor, server_answer);
+            // send_answer_to_client(threadL->client_descriptor, server_answer);
             return false;
         }
         else

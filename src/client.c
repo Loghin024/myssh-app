@@ -42,7 +42,7 @@ void fill_signup_form();
 int main(){
 
      // Generate key pair
-    generate_keypair(&rsa_keypair_client, 2048);
+    generate_keypair(&rsa_keypair_client[0], 2048);
 
     struct sockaddr_in server;
     socket_descriptor = configure_socket(&server);
@@ -53,7 +53,7 @@ int main(){
     CHECK(fflush(stdout) != 0, "[client]:Error at fflush\n")
 
     //server-client public key exchange
-    send_client_public_key(rsa_keypair_client);
+    send_client_public_key(rsa_keypair_client[0]);
     receive_server_public_key(&rsa_keypair_server);
 
     //receiving commands from user until he decides to quit
@@ -135,7 +135,7 @@ void receive_answer_from_server()
     //decrypt 
     bzero(plain_text, sizeof(plain_text));
     bzero(server_answer, sizeof(server_answer));
-    rsa_decrypt(encrypted_server_answer, RSA_size(rsa_keypair_client), rsa_keypair_client, plain_text);
+    rsa_decrypt(encrypted_server_answer, RSA_size(rsa_keypair_client[0]), rsa_keypair_client[0], plain_text);
     memcpy(server_answer, plain_text, ANSWER_BUFF_SIZE);
 }
 
@@ -234,7 +234,7 @@ void  receive_server_public_key(RSA **rsa_public_key) {
 void send_client_public_key(RSA *rsa_public_key)
 {
      // Check if the RSA object is valid
-    if (rsa_keypair_client == NULL) {
+    if (rsa_keypair_client[0] == NULL) {
         // Handle error
         return;
     }
@@ -242,7 +242,7 @@ void send_client_public_key(RSA *rsa_public_key)
     // Get the public key components (modulus and public exponent)
     const BIGNUM *modulus = NULL;
     const BIGNUM *exponent = NULL;
-    RSA_get0_key(rsa_keypair_client, &modulus, &exponent, NULL);
+    RSA_get0_key(rsa_keypair_client[0], &modulus, &exponent, NULL);
 
     // Convert the components to hexadecimal strings for transmission
     char *modulus_hex = BN_bn2hex(modulus);

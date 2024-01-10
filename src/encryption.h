@@ -5,7 +5,7 @@
 #include "utils.h"
 
 RSA *rsa_keypair_server = NULL;
-RSA *rsa_keypair_client = NULL;
+RSA *rsa_keypair_client[64];//we have maximum 64 clients
 unsigned char plain_text[4096];
 unsigned char ciphertext[256]; // Sufficient size for a 2048-bit key
 
