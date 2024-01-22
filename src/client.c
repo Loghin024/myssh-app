@@ -30,12 +30,9 @@ bool is_logged = false;
 
 void receive_server_public_key(RSA **rsa_public_key);
 void send_client_public_key(RSA *rsa_public_key);
-
 int configure_socket(struct sockaddr_in *server);
-
 void send_command_to_server();
 void receive_answer_from_server();
-
 void fill_login_form();
 void fill_signup_form();
 

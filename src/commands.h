@@ -104,13 +104,9 @@ bool listFiles(const char *path, char * server_answer) {
             // Regular file
             strcat(server_answer, "\nFile: ");
             strcat(server_answer, entry->d_name);
-            // printf("File: %s\n", entry->d_name);
         } else if (entry->d_type == DT_DIR && strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            // Directory (excluding "." and "..")
             strcat(server_answer, "\nDirectory: ");
             strcat(server_answer, entry->d_name);
-            // printf("Directory: %s\n", entry->d_name);
-            // listFiles(filePath, server_answer); // Recursive call to list files in the subdirectory
         }
     }
 
